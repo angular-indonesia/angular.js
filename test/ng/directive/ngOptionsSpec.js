@@ -2536,18 +2536,15 @@ describe('ngOptions', function() {
         scope.isBlank = true;
       });
 
-      expect(element.find('option').length).toBe(2);
-      option = element.find('option').eq(0);
-      expect(option.val()).toBe('');
-      expect(option.text()).toBe('blank');
+      expect(element).toEqualSelect([''], 'object:4');
 
-      scope.$apply(function() {
-        scope.isBlank = false;
-      });
+      scope.$apply('isBlank = false');
 
-      expect(element.find('option').length).toBe(1);
-      option = element.find('option').eq(0);
-      expect(option.text()).toBe('A');
+      expect(element).toEqualSelect(['?'], 'object:4');
+
+      scope.$apply('isBlank = true');
+
+      expect(element).toEqualSelect([''], 'object:4');
     });
 
 
@@ -2567,9 +2564,7 @@ describe('ngOptions', function() {
 
         scope.$apply('isBlank = false');
 
-        options = element.find('option');
-        expect(options.length).toBe(1);
-        expect(options.eq(0).text()).toBe('A');
+        expect(element).toEqualSelect(['?'], 'object:3');
       }
     );
 
@@ -3301,4 +3296,94 @@ describe('ngOptions', function() {
       expect(scope.form.select.$pristine).toBe(true);
     });
   });
+
+  describe('selectCtrl api', function() {
+
+    it('should reflect the status of empty and unknown option', function() {
+      createSingleSelect('<option ng-if="isBlank" value="">blank</option>');
+
+      var selectCtrl = element.controller('select');
+
+      scope.$apply(function() {
+        scope.values = [{name: 'A'}, {name: 'B'}];
+        scope.isBlank = true;
+      });
+
+      expect(element).toEqualSelect([''], 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(true);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+
+      // empty -> selection
+      scope.$apply(function() {
+        scope.selected = scope.values[0];
+      });
+
+      expect(element).toEqualSelect('', ['object:4'], 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+
+      // remove empty
+      scope.$apply('isBlank = false');
+
+      expect(element).toEqualSelect(['object:4'], 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(false);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+
+      // selection -> unknown
+      scope.$apply('selected = "unmatched"');
+
+      expect(element).toEqualSelect(['?'], 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(false);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(true);
+
+      // add empty
+      scope.$apply('isBlank = true');
+
+      expect(element).toEqualSelect(['?'], '', 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(true);
+
+      // unknown -> empty
+      scope.$apply(function() {
+        scope.selected = null;
+      });
+
+      expect(element).toEqualSelect([''], 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(true);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+
+      // empty -> unknown
+      scope.$apply('selected = "unmatched"');
+
+      expect(element).toEqualSelect(['?'], '', 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(true);
+
+      // unknown -> selection
+      scope.$apply(function() {
+        scope.selected = scope.values[1];
+      });
+
+      expect(element).toEqualSelect('', 'object:4', ['object:5']);
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(false);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+
+      // selection -> empty
+      scope.$apply('selected = null');
+
+      expect(element).toEqualSelect([''], 'object:4', 'object:5');
+      expect(selectCtrl.$hasEmptyOption()).toBe(true);
+      expect(selectCtrl.$isEmptyOptionSelected()).toBe(true);
+      expect(selectCtrl.$isUnknownOptionSelected()).toBe(false);
+    });
+  });
+
 });

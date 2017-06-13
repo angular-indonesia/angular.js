@@ -3277,6 +3277,25 @@ describe('parser', function() {
             expect(called).toBe(true);
           }));
 
+          it('should always be invoked if inputs are non-primitive', inject(function($parse) {
+            var called = false;
+            function interceptor(v) {
+              called = true;
+              return v.sub;
+            }
+
+            scope.$watch($parse('[o]', interceptor));
+            scope.o = {sub: 1};
+
+            called = false;
+            scope.$digest();
+            expect(called).toBe(true);
+
+            called = false;
+            scope.$digest();
+            expect(called).toBe(true);
+          }));
+
           it('should not be invoked unless the input.valueOf() changes even if the instance changes', inject(function($parse) {
             var called = false;
             function interceptor(v) {
@@ -3320,6 +3339,32 @@ describe('parser', function() {
             scope.$watch($parse(undefined, interceptor));
             scope.$digest();
             expect(called).toBe(true);
+          }));
+
+          it('should not affect when a one-time binding becomes stable', inject(function($parse) {
+            scope.$watch($parse('::x'));
+            scope.$watch($parse('::x', identity));
+            scope.$watch($parse('::x', function() { return 1; }));  //interceptor that returns non-undefined
+
+            scope.$digest();
+            expect(scope.$$watchersCount).toBe(3);
+
+            scope.x = 1;
+            scope.$digest();
+            expect(scope.$$watchersCount).toBe(0);
+          }));
+
+          it('should not affect when a one-time literal binding becomes stable', inject(function($parse) {
+            scope.$watch($parse('::[x]'));
+            scope.$watch($parse('::[x]', identity));
+            scope.$watch($parse('::[x]', function() { return 1; }));  //interceptor that returns non-literal
+
+            scope.$digest();
+            expect(scope.$$watchersCount).toBe(3);
+
+            scope.x = 1;
+            scope.$digest();
+            expect(scope.$$watchersCount).toBe(0);
           }));
         });
 

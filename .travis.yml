@@ -20,21 +20,11 @@ env:
     - JOB=e2e TEST_TARGET=jqlite BROWSER_PROVIDER=saucelabs
     - JOB=e2e TEST_TARGET=jquery BROWSER_PROVIDER=saucelabs
   global:
-    # node 4 likes the G++ v4.8 compiler
-    # see https://docs.travis-ci.com/user/languages/javascript-with-nodejs#Node.js-v4-(or-io.js-v3)-compiler-requirements
-    - CXX=g++-4.8
     - SAUCE_USERNAME=angular-ci
     - SAUCE_ACCESS_KEY=9b988f434ff8-fbca-8aa4-4ae3-35442987
     - LOGS_DIR=/tmp/angular-build/logs
     - BROWSER_PROVIDER_READY_FILE=/tmp/browsersprovider-tunnel-ready
     - secure: oTBjhnOKhs0qDSKTf7fE4f6DYiNDPycvB7qfSF5QRIbJK/LK/J4UtFwetXuXj79HhUZG9qnoT+5e7lPaiaMlpsIKn9ann7ffqFWN1E8TMtpJF+AGigx3djYElwfgf5nEnFUFhwjFzvbfpZNnxVGgX5YbIZpe/WUbHkP4ffU0Wks=
-
-addons:
-  apt:
-    sources:
-      - ubuntu-toolchain-r-test
-    packages:
-      - g++-4.8
 
 before_install:
   - curl -o- -L https://yarnpkg.com/install.sh | bash -s -- --version 0.27.5
@@ -62,6 +52,9 @@ notifications:
 jobs:
   include:
     - stage: deploy
+      # Don't deploy from PRs.
+      # The deployment logic for pushed branches is defined in scripts\travis\build.sh
+      if: type != pull_request
       env:
         - JOB=deploy
       before_script: skip
@@ -85,8 +78,7 @@ jobs:
           on:
             repo: angular/angular.js
             all_branches: true
-            # deploy a new docs version when the commit is tagged on the "latest" npm version
-            condition: $TRAVIS_TAG != '' && $( jq ".distTag" "package.json" | tr -d "\"[:space:]" ) = latest
+            condition: $DEPLOY_DOCS
         - provider: gcs
           skip_cleanup: true
           access_key_id: GOOGLDB7W2J3LFHICF3R
@@ -98,6 +90,5 @@ jobs:
           on:
             repo: angular/angular.js
             all_branches: true
-            # upload the build when the commit is tagged or the branch is "master"
-            condition: $TRAVIS_TAG != '' || ($TRAVIS_PULL_REQUEST = false && $TRAVIS_BRANCH = master)
+            condition: $DEPLOY_CODE
 

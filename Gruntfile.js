@@ -311,6 +311,17 @@ module.exports = function(grunt) {
           }
         ]
       },
+      deployFirebaseCode: {
+        files: [
+          // the zip file should not be compressed again.
+          {
+            src: 'build/*.zip',
+            dest: 'uploadCode/' + deployVersion + '/',
+            expand: true,
+            flatten: true
+          }
+        ]
+      },
       deployFirebaseDocs: {
         files: [
           // The source files are needed by the embedded examples in the docs app.
@@ -344,7 +355,7 @@ module.exports = function(grunt) {
         options: {
           mode: 'gzip'
         },
-        src: ['**'],
+        src: ['**', '!*.zip'],
         cwd: 'build',
         expand: true,
         dest: 'uploadCode/' + deployVersion + '/'
@@ -352,6 +363,10 @@ module.exports = function(grunt) {
     },
 
     shell: {
+      // Travis expects the firebase.json in the repository root, but we have it in a sub-folder
+      'symlink-firebase-docs': {
+        command: 'ln -s ./scripts/docs.angularjs.org-firebase/firebase.json ./firebase.json'
+      },
       'install-node-dependencies': {
         command: 'yarn'
       },
@@ -450,6 +465,8 @@ module.exports = function(grunt) {
   grunt.registerTask('prepareFirebaseDeploy', [
     'package',
     'compress:deployFirebaseCode',
+    'copy:deployFirebaseCode',
+    'shell:symlink-firebase-docs',
     'copy:deployFirebaseDocs'
   ]);
   grunt.registerTask('default', ['package']);

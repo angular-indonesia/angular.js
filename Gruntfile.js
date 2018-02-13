@@ -13,6 +13,8 @@ var semver = require('semver');
 var exec = require('shelljs').exec;
 var pkg = require(__dirname + '/package.json');
 
+var docsScriptFolder = 'scripts/docs.angularjs.org-firebase';
+
 // Node.js version checks
 if (!semver.satisfies(process.version, pkg.engines.node)) {
   reportOrFail('Invalid node version (' + process.version + '). ' +
@@ -163,7 +165,11 @@ module.exports = function(grunt) {
     clean: {
       build: ['build'],
       tmp: ['tmp'],
-      deploy: ['uploadDocs', 'uploadCode']
+      deploy: [
+        'deploy/docs',
+        'deploy/code',
+        docsScriptFolder + '/functions/html'
+      ]
     },
 
     eslint: {
@@ -174,6 +180,7 @@ module.exports = function(grunt) {
           'docs/**/*.js',
           'lib/**/*.js',
           'scripts/**/*.js',
+          '!scripts/*/*/node_modules/**',
           'src/**/*.js',
           'test/**/*.js',
           'i18n/**/*.js',
@@ -314,12 +321,12 @@ module.exports = function(grunt) {
       },
       deployFirebaseCode: {
         files: [
-          // the zip file should not be compressed again.
+          // copy files that are not handled by compress
           {
-            src: 'build/*.zip',
-            dest: 'uploadCode/' + deployVersion + '/',
-            expand: true,
-            flatten: true
+            cwd: 'build',
+            src: '**/*.{zip,jpg,jpeg,png}',
+            dest: 'deploy/code/' + deployVersion + '/',
+            expand: true
           }
         ]
       },
@@ -328,14 +335,26 @@ module.exports = function(grunt) {
           // The source files are needed by the embedded examples in the docs app.
           {
             src: ['build/angular*.{js,js.map,min.js}', 'build/sitemap.xml'],
-            dest: 'uploadDocs/',
+            dest: 'deploy/docs/',
             expand: true,
             flatten: true
           },
           {
             cwd: 'build/docs',
             src: '**',
-            dest: 'uploadDocs/',
+            dest: 'deploy/docs/',
+            expand: true
+          },
+          {
+            src: ['build/docs/index-production.html'],
+            dest: docsScriptFolder + '/functions/content',
+            expand: true,
+            flatten: true
+          },
+          {
+            cwd: 'build/docs',
+            src: 'partials/**',
+            dest: docsScriptFolder + '/functions/content',
             expand: true
           }
         ]
@@ -356,10 +375,11 @@ module.exports = function(grunt) {
         options: {
           mode: 'gzip'
         },
-        src: ['**', '!*.zip'],
+        // Already compressed files should not be compressed again
+        src: ['**', '!**/*.{zip,png,jpeg,jpg}'],
         cwd: 'build',
         expand: true,
-        dest: 'uploadCode/' + deployVersion + '/'
+        dest: 'deploy/code/' + deployVersion + '/'
       }
     },
 
@@ -459,7 +479,7 @@ module.exports = function(grunt) {
     'merge-conflict',
     'eslint'
   ]);
-  grunt.registerTask('prepareFirebaseDeploy', [
+  grunt.registerTask('prepareDeploy', [
     'package',
     'compress:deployFirebaseCode',
     'copy:deployFirebaseCode',

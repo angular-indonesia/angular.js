@@ -79,6 +79,7 @@
     "toJsonReplacer": false,
     "toJson": false,
     "fromJson": false,
+    "addDateMinutes": false,
     "convertTimezoneToLocal": false,
     "timezoneToOffset": false,
     "startingTag": false,
@@ -161,6 +162,7 @@
     "urlResolve": false,
     "urlIsSameOrigin": false,
     "urlIsSameOriginAsBaseUrl": false,
+    "urlIsAllowedOriginFactory": false,
 
     /* ng/controller.js */
     "identifierForController": false,

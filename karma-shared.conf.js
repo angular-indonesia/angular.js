@@ -107,12 +107,14 @@ module.exports = function(config, specificOptions) {
       'SL_iOS_10': {
         base: 'SauceLabs',
         browserName: 'iphone',
+        platform: 'OS X 10.12',
         version: '10.3'
       },
       'SL_iOS_11': {
         base: 'SauceLabs',
         browserName: 'iphone',
-        version: '11'
+        platform: 'OS X 10.12',
+        version: '11.3'
       },
 
       'BS_Chrome': {

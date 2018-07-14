@@ -26,43 +26,27 @@ angular.mock = {};
  * that there are several helper methods available which can be used in tests.
  */
 angular.mock.$BrowserProvider = function() {
-  this.$get = function() {
-    return new angular.mock.$Browser();
-  };
+  this.$get = [
+    '$log', '$$taskTrackerFactory',
+    function($log, $$taskTrackerFactory) {
+      return new angular.mock.$Browser($log, $$taskTrackerFactory);
+    }
+  ];
 };
 
-angular.mock.$Browser = function() {
+angular.mock.$Browser = function($log, $$taskTrackerFactory) {
   var self = this;
+  var taskTracker = $$taskTrackerFactory($log);
 
   this.isMock = true;
   self.$$url = 'http://server/';
   self.$$lastUrl = self.$$url; // used by url polling fn
   self.pollFns = [];
 
-  // Testability API
-
-  var outstandingRequestCount = 0;
-  var outstandingRequestCallbacks = [];
-  self.$$incOutstandingRequestCount = function() { outstandingRequestCount++; };
-  self.$$completeOutstandingRequest = function(fn) {
-    try {
-      fn();
-    } finally {
-      outstandingRequestCount--;
-      if (!outstandingRequestCount) {
-        while (outstandingRequestCallbacks.length) {
-          outstandingRequestCallbacks.pop()();
-        }
-      }
-    }
-  };
-  self.notifyWhenNoOutstandingRequests = function(callback) {
-    if (outstandingRequestCount) {
-      outstandingRequestCallbacks.push(callback);
-    } else {
-      callback();
-    }
-  };
+  // Task-tracking API
+  self.$$completeOutstandingRequest = taskTracker.completeTask;
+  self.$$incOutstandingRequestCount = taskTracker.incTaskCount;
+  self.notifyWhenNoOutstandingRequests = taskTracker.notifyWhenNoPendingTasks;
 
   // register url polling fn
 
@@ -86,13 +70,22 @@ angular.mock.$Browser = function() {
   self.deferredFns = [];
   self.deferredNextId = 0;
 
-  self.defer = function(fn, delay) {
-    // Note that we do not use `$$incOutstandingRequestCount` or `$$completeOutstandingRequest`
-    // in this mock implementation.
+  self.defer = function(fn, delay, taskType) {
+    var timeoutId = self.deferredNextId++;
+
     delay = delay || 0;
-    self.deferredFns.push({time:(self.defer.now + delay), fn:fn, id: self.deferredNextId});
-    self.deferredFns.sort(function(a, b) { return a.time - b.time;});
-    return self.deferredNextId++;
+    taskType = taskType || taskTracker.DEFAULT_TASK_TYPE;
+
+    taskTracker.incTaskCount(taskType);
+    self.deferredFns.push({
+      id: timeoutId,
+      type: taskType,
+      time: (self.defer.now + delay),
+      fn: fn
+    });
+    self.deferredFns.sort(function(a, b) { return a.time - b.time; });
+
+    return timeoutId;
   };
 
 
@@ -106,14 +99,15 @@ angular.mock.$Browser = function() {
 
 
   self.defer.cancel = function(deferId) {
-    var fnIndex;
+    var taskIndex;
 
-    angular.forEach(self.deferredFns, function(fn, index) {
-      if (fn.id === deferId) fnIndex = index;
+    angular.forEach(self.deferredFns, function(task, index) {
+      if (task.id === deferId) taskIndex = index;
     });
 
-    if (angular.isDefined(fnIndex)) {
-      self.deferredFns.splice(fnIndex, 1);
+    if (angular.isDefined(taskIndex)) {
+      var task = self.deferredFns.splice(taskIndex, 1)[0];
+      taskTracker.completeTask(angular.noop, task.type);
       return true;
     }
 
@@ -127,6 +121,8 @@ angular.mock.$Browser = function() {
    * @description
    * Flushes all pending requests and executes the defer callbacks.
    *
+   * See {@link ngMock.$flushPendingsTasks} for more info.
+   *
    * @param {number=} number of milliseconds to flush. See {@link #defer.now}
    */
   self.defer.flush = function(delay) {
@@ -135,24 +131,74 @@ angular.mock.$Browser = function() {
     if (angular.isDefined(delay)) {
       // A delay was passed so compute the next time
       nextTime = self.defer.now + delay;
+    } else if (self.deferredFns.length) {
+      // No delay was passed so set the next time so that it clears the deferred queue
+      nextTime = self.deferredFns[self.deferredFns.length - 1].time;
     } else {
-      if (self.deferredFns.length) {
-        // No delay was passed so set the next time so that it clears the deferred queue
-        nextTime = self.deferredFns[self.deferredFns.length - 1].time;
-      } else {
-        // No delay passed, but there are no deferred tasks so flush - indicates an error!
-        throw new Error('No deferred tasks to be flushed');
-      }
+      // No delay passed, but there are no deferred tasks so flush - indicates an error!
+      throw new Error('No deferred tasks to be flushed');
     }
 
     while (self.deferredFns.length && self.deferredFns[0].time <= nextTime) {
       // Increment the time and call the next deferred function
       self.defer.now = self.deferredFns[0].time;
-      self.deferredFns.shift().fn();
+      var task = self.deferredFns.shift();
+      taskTracker.completeTask(task.fn, task.type);
     }
 
     // Ensure that the current time is correct
     self.defer.now = nextTime;
+  };
+
+  /**
+   * @name $browser#defer.getPendingTasks
+   *
+   * @description
+   * Returns the currently pending tasks that need to be flushed.
+   * You can request a specific type of tasks only, by specifying a `taskType`.
+   *
+   * @param {string=} taskType - The type tasks to return.
+   */
+  self.defer.getPendingTasks = function(taskType) {
+    return !taskType
+        ? self.deferredFns
+        : self.deferredFns.filter(function(task) { return task.type === taskType; });
+  };
+
+  /**
+   * @name $browser#defer.formatPendingTasks
+   *
+   * @description
+   * Formats each task in a list of pending tasks as a string, suitable for use in error messages.
+   *
+   * @param {Array<Object>} pendingTasks - A list of task objects.
+   * @return {Array<string>} A list of stringified tasks.
+   */
+  self.defer.formatPendingTasks = function(pendingTasks) {
+    return pendingTasks.map(function(task) {
+      return '{id: ' + task.id + ', type: ' + task.type + ', time: ' + task.time + '}';
+    });
+  };
+
+  /**
+   * @name $browser#defer.verifyNoPendingTasks
+   *
+   * @description
+   * Verifies that there are no pending tasks that need to be flushed.
+   * You can check for a specific type of tasks only, by specifying a `taskType`.
+   *
+   * See {@link $verifyNoPendingTasks} for more info.
+   *
+   * @param {string=} taskType - The type tasks to check for.
+   */
+  self.defer.verifyNoPendingTasks = function(taskType) {
+    var pendingTasks = self.defer.getPendingTasks(taskType);
+
+    if (pendingTasks.length) {
+      var formattedTasks = self.defer.formatPendingTasks(pendingTasks).join('\n  ');
+      throw new Error('Deferred tasks to flush (' + pendingTasks.length + '):\n  ' +
+          formattedTasks);
+    }
   };
 
   self.$$baseHref = '/';
@@ -193,6 +239,82 @@ angular.mock.$Browser.prototype = {
   }
 };
 
+/**
+ * @ngdoc function
+ * @name $flushPendingTasks
+ *
+ * @description
+ * Flushes all currently pending tasks and executes the corresponding callbacks.
+ *
+ * Optionally, you can also pass a `delay` argument to only flush tasks that are scheduled to be
+ * executed within `delay` milliseconds. Currently, `delay` only applies to timeouts, since all
+ * other tasks have a delay of 0 (i.e. they are scheduled to be executed as soon as possible, but
+ * still asynchronously).
+ *
+ * If no delay is specified, it uses a delay such that all currently pending tasks are flushed.
+ *
+ * The types of tasks that are flushed include:
+ *
+ * - Pending timeouts (via {@link $timeout}).
+ * - Pending tasks scheduled via {@link ng.$rootScope.Scope#$applyAsync $applyAsync}.
+ * - Pending tasks scheduled via {@link ng.$rootScope.Scope#$evalAsync $evalAsync}.
+ *   These include tasks scheduled via `$evalAsync()` indirectly (such as {@link $q} promises).
+ *
+ * <div class="alert alert-info">
+ *   Periodic tasks scheduled via {@link $interval} use a different queue and are not flushed by
+ *   `$flushPendingTasks()`. Use {@link ngMock.$interval#flush $interval.flush([millis])} instead.
+ * </div>
+ *
+ * @param {number=} delay - The number of milliseconds to flush.
+ */
+angular.mock.$FlushPendingTasksProvider = function() {
+  this.$get = [
+    '$browser',
+    function($browser) {
+      return function $flushPendingTasks(delay) {
+        return $browser.defer.flush(delay);
+      };
+    }
+  ];
+};
+
+/**
+ * @ngdoc function
+ * @name $verifyNoPendingTasks
+ *
+ * @description
+ * Verifies that there are no pending tasks that need to be flushed. It throws an error if there are
+ * still pending tasks.
+ *
+ * You can check for a specific type of tasks only, by specifying a `taskType`.
+ *
+ * Available task types:
+ *
+ * - `$timeout`: Pending timeouts (via {@link $timeout}).
+ * - `$http`: Pending HTTP requests (via {@link $http}).
+ * - `$route`: In-progress route transitions (via {@link $route}).
+ * - `$applyAsync`: Pending tasks scheduled via {@link ng.$rootScope.Scope#$applyAsync $applyAsync}.
+ * - `$evalAsync`: Pending tasks scheduled via {@link ng.$rootScope.Scope#$evalAsync $evalAsync}.
+ *   These include tasks scheduled via `$evalAsync()` indirectly (such as {@link $q} promises).
+ *
+ * <div class="alert alert-info">
+ *   Periodic tasks scheduled via {@link $interval} use a different queue and are not taken into
+ *   account by `$verifyNoPendingTasks()`. There is currently no way to verify that there are no
+ *   pending {@link $interval} tasks.
+ * </div>
+ *
+ * @param {string=} taskType - The type of tasks to check for.
+ */
+angular.mock.$VerifyNoPendingTasksProvider = function() {
+  this.$get = [
+    '$browser',
+    function($browser) {
+      return function $verifyNoPendingTasks(taskType) {
+        return $browser.defer.verifyNoPendingTasks(taskType);
+      };
+    }
+  ];
+};
 
 /**
  * @ngdoc provider
@@ -461,62 +583,40 @@ angular.mock.$LogProvider = function() {
  * @returns {promise} A promise which will be notified on each iteration.
  */
 angular.mock.$IntervalProvider = function() {
-  this.$get = ['$browser', '$rootScope', '$q', '$$q',
-       function($browser,   $rootScope,   $q,   $$q) {
+  this.$get = ['$browser', '$$intervalFactory',
+       function($browser,   $$intervalFactory) {
     var repeatFns = [],
         nextRepeatId = 0,
-        now = 0;
+        now = 0,
+        setIntervalFn = function(tick, delay, deferred, skipApply) {
+          var id = nextRepeatId++;
+          var fn = !skipApply ? tick : function() {
+            tick();
+            $browser.defer.flush();
+          };
 
-    var $interval = function(fn, delay, count, invokeApply) {
-      var hasParams = arguments.length > 4,
-          args = hasParams ? Array.prototype.slice.call(arguments, 4) : [],
-          iteration = 0,
-          skipApply = (angular.isDefined(invokeApply) && !invokeApply),
-          deferred = (skipApply ? $$q : $q).defer(),
-          promise = deferred.promise;
-
-      count = (angular.isDefined(count)) ? count : 0;
-      promise.then(null, function() {}, (!hasParams) ? fn : function() {
-        fn.apply(null, args);
-      });
-
-      promise.$$intervalId = nextRepeatId;
-
-      function tick() {
-        deferred.notify(iteration++);
-
-        if (count > 0 && iteration >= count) {
-          var fnIndex;
-          deferred.resolve(iteration);
-
-          angular.forEach(repeatFns, function(fn, index) {
-            if (fn.id === promise.$$intervalId) fnIndex = index;
+          repeatFns.push({
+            nextTime: (now + (delay || 0)),
+            delay: delay || 1,
+            fn: fn,
+            id: id,
+            deferred: deferred
           });
+          repeatFns.sort(function(a, b) { return a.nextTime - b.nextTime; });
 
-          if (angular.isDefined(fnIndex)) {
-            repeatFns.splice(fnIndex, 1);
+          return id;
+        },
+        clearIntervalFn = function(id) {
+          for (var fnIndex = repeatFns.length - 1; fnIndex >= 0; fnIndex--) {
+            if (repeatFns[fnIndex].id === id) {
+              repeatFns.splice(fnIndex, 1);
+              break;
+            }
           }
-        }
+        };
 
-        if (skipApply) {
-          $browser.defer.flush();
-        } else {
-          $rootScope.$apply();
-        }
-      }
+    var $interval = $$intervalFactory(setIntervalFn, clearIntervalFn);
 
-      repeatFns.push({
-        nextTime: (now + (delay || 0)),
-        delay: delay || 1,
-        fn: tick,
-        id: nextRepeatId,
-        deferred: deferred
-      });
-      repeatFns.sort(function(a, b) { return a.nextTime - b.nextTime;});
-
-      nextRepeatId++;
-      return promise;
-    };
     /**
      * @ngdoc method
      * @name $interval#cancel
@@ -529,17 +629,15 @@ angular.mock.$IntervalProvider = function() {
      */
     $interval.cancel = function(promise) {
       if (!promise) return false;
-      var fnIndex;
 
-      angular.forEach(repeatFns, function(fn, index) {
-        if (fn.id === promise.$$intervalId) fnIndex = index;
-      });
-
-      if (angular.isDefined(fnIndex)) {
-        repeatFns[fnIndex].deferred.promise.then(undefined, function() {});
-        repeatFns[fnIndex].deferred.reject('canceled');
-        repeatFns.splice(fnIndex, 1);
-        return true;
+      for (var fnIndex = repeatFns.length - 1; fnIndex >= 0; fnIndex--) {
+        if (repeatFns[fnIndex].id === promise.$$intervalId) {
+          var deferred = repeatFns[fnIndex].deferred;
+          deferred.promise.then(undefined, function() {});
+          deferred.reject('canceled');
+          repeatFns.splice(fnIndex, 1);
+          return true;
+        }
       }
 
       return false;
@@ -2180,38 +2278,85 @@ angular.mock.$TimeoutDecorator = ['$delegate', '$browser', function($delegate, $
   /**
    * @ngdoc method
    * @name $timeout#flush
+   *
+   * @deprecated
+   * sinceVersion="1.7.3"
+   *
+   * This method flushes all types of tasks (not only timeouts), which is unintuitive.
+   * It is recommended to use {@link ngMock.$flushPendingTasks} instead.
+   *
    * @description
    *
    * Flushes the queue of pending tasks.
    *
+   * _This method is essentially an alias of {@link ngMock.$flushPendingTasks}._
+   *
+   * <div class="alert alert-warning">
+   *   For historical reasons, this method will also flush non-`$timeout` pending tasks, such as
+   *   {@link $q} promises and tasks scheduled via
+   *   {@link ng.$rootScope.Scope#$applyAsync $applyAsync} and
+   *   {@link ng.$rootScope.Scope#$evalAsync $evalAsync}.
+   * </div>
+   *
    * @param {number=} delay maximum timeout amount to flush up until
    */
   $delegate.flush = function(delay) {
+    // For historical reasons, `$timeout.flush()` flushes all types of pending tasks.
+    // Keep the same behavior for backwards compatibility (and because it doesn't make sense to
+    // selectively flush scheduled events out of order).
     $browser.defer.flush(delay);
   };
 
   /**
    * @ngdoc method
    * @name $timeout#verifyNoPendingTasks
+   *
+   * @deprecated
+   * sinceVersion="1.7.3"
+   *
+   * This method takes all types of tasks (not only timeouts) into account, which is unintuitive.
+   * It is recommended to use {@link ngMock.$verifyNoPendingTasks} instead, which additionally
+   * allows checking for timeouts only (with `$verifyNoPendingTasks('$timeout')`).
+   *
    * @description
    *
-   * Verifies that there are no pending tasks that need to be flushed.
+   * Verifies that there are no pending tasks that need to be flushed. It throws an error if there
+   * are still pending tasks.
+   *
+   * _This method is essentially an alias of {@link ngMock.$verifyNoPendingTasks} (called with no
+   * arguments)._
+   *
+   * <div class="alert alert-warning">
+   *   <p>
+   *     For historical reasons, this method will also verify non-`$timeout` pending tasks, such as
+   *     pending {@link $http} requests, in-progress {@link $route} transitions, unresolved
+   *     {@link $q} promises and tasks scheduled via
+   *     {@link ng.$rootScope.Scope#$applyAsync $applyAsync} and
+   *     {@link ng.$rootScope.Scope#$evalAsync $evalAsync}.
+   *   </p>
+   *   <p>
+   *     It is recommended to use {@link ngMock.$verifyNoPendingTasks} instead, which additionally
+   *     supports verifying a specific type of tasks. For example, you can verify there are no
+   *     pending timeouts with `$verifyNoPendingTasks('$timeout')`.
+   *   </p>
+   * </div>
    */
   $delegate.verifyNoPendingTasks = function() {
-    if ($browser.deferredFns.length) {
-      throw new Error('Deferred tasks to flush (' + $browser.deferredFns.length + '): ' +
-          formatPendingTasksAsString($browser.deferredFns));
+    // For historical reasons, `$timeout.verifyNoPendingTasks()` takes all types of pending tasks
+    // into account. Keep the same behavior for backwards compatibility.
+    var pendingTasks = $browser.defer.getPendingTasks();
+
+    if (pendingTasks.length) {
+      var formattedTasks = $browser.defer.formatPendingTasks(pendingTasks).join('\n  ');
+      var hasPendingTimeout = pendingTasks.some(function(task) { return task.type === '$timeout'; });
+      var extraMessage = hasPendingTimeout ? '' : '\n\nNone of the pending tasks are timeouts. ' +
+          'If you only want to verify pending timeouts, use ' +
+          '`$verifyNoPendingTasks(\'$timeout\')` instead.';
+
+      throw new Error('Deferred tasks to flush (' + pendingTasks.length + '):\n  ' +
+          formattedTasks + extraMessage);
     }
   };
-
-  function formatPendingTasksAsString(tasks) {
-    var result = [];
-    angular.forEach(tasks, function(task) {
-      result.push('{id: ' + task.id + ', time: ' + task.time + '}');
-    });
-
-    return result.join(', ');
-  }
 
   return $delegate;
 }];
@@ -2434,7 +2579,9 @@ angular.module('ngMock', ['ng']).provider({
   $log: angular.mock.$LogProvider,
   $interval: angular.mock.$IntervalProvider,
   $rootElement: angular.mock.$RootElementProvider,
-  $componentController: angular.mock.$ComponentControllerProvider
+  $componentController: angular.mock.$ComponentControllerProvider,
+  $flushPendingTasks: angular.mock.$FlushPendingTasksProvider,
+  $verifyNoPendingTasks: angular.mock.$VerifyNoPendingTasksProvider
 }).config(['$provide', '$compileProvider', function($provide, $compileProvider) {
   $provide.decorator('$timeout', angular.mock.$TimeoutDecorator);
   $provide.decorator('$$rAF', angular.mock.$RAFDecorator);
